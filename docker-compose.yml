@@ -1,0 +1,99 @@
+services:
+
+  init:
+    image: bash:5-alpine3.23
+    container_name: sonar-init
+    privileged: true
+    user: root
+    volumes:
+      - ./sonar-init.sh:/mnt/sonar-init.sh
+    command: [ "bash", "-e", "/mnt/sonar-init.sh" ]
+
+  sonarqube:
+    image: sonarqube:25.12.0.117093-community
+    container_name: sonarqube-service
+    restart: unless-stopped
+    stop_grace_period: 1m30s
+    cpus: '1.8' # 90% of 2 CPUs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.8'
+          memory: 3096M  # 75% of 4 GB
+    ulimits:
+      nproc: 131072
+      nofile:
+        soft: 8192
+        hard: 131072
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      sonarqube-db:
+        condition: service_healthy
+    environment:
+      SONAR_JDBC_URL: jdbc:postgresql://sonarqube-db:5432/sonarqube
+      SONAR_JDBC_USERNAME: "${POSTGRES_USER:-sonarqube}"
+      SONAR_JDBC_PASSWORD: "${POSTGRES_PASSWORD:-sonarqube}"
+      SONAR_AUTH_JWTBASE64HS256SECRET: "${SONAR_AUTH_JWTBASE64HS256SECRET}"
+      SONAR_WEB_HTTP_MAXTHREADS: 50
+      SONAR_WEB_HTTP_MINTHREADS: 5
+      SONAR_UPDATECENTER_ACTIVATE: true
+      SONAR_TELEMETRY_ENABLE: false
+      SONAR_AI_CODEFIX_HIDDEN: true
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+    ports:
+      - "${SONARQUBE_WEB_PORT:-9010}:9000"
+    networks:
+      - sonarqube
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/api/system/status" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  sonarqube-db:
+    image: postgres:17
+    container_name: sonarqube-postgres
+    restart: unless-stopped
+    stop_grace_period: 1m30s
+    shm_size: 128mb
+    cpus: '1.8'  # 90% of 2 CPUs
+    deploy:
+      resources:
+        limits:
+          cpus: '1.8'
+    ports:
+      - "${POSTGRES_DB_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-sonarqube}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-sonarqube}"
+    volumes:
+      - sonarqube_postgresql_data:/var/lib/postgresql/data
+    networks:
+      - sonarqube
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sonarqube}" ]
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_postgresql_data:
+
+networks:
+  sonarqube:
+    driver: bridge
